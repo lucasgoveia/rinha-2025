@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"context"
@@ -94,7 +94,7 @@ func main() {
 
 			logger.Debug("Processing messages", "consumer", appConfig.Redis.ConsumerName, "batchSize", len(stream.Messages), "total", totalMessages)
 
-			worker.Process(reqs)
+			go worker.Process(reqs)
 		}
 	}
 }
