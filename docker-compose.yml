@@ -6,16 +6,15 @@
     depends_on:
       - postgres
       - redis
-      - jaeger
     restart: always
     networks:
       - app
-      - payment-processor
     deploy:
       resources:
         limits:
           cpus: '0.2'
-          memory: '50M'
+          memory: '30M'
+
   worker: &worker
     build:
       context: .
@@ -23,7 +22,6 @@
     depends_on:
       - postgres
       - redis
-      - jaeger
     networks:
       - app
       - payment-processor
@@ -31,7 +29,7 @@
     deploy:
       resources:
         limits:
-          cpus: '0.4'
+          cpus: '0.5'
           memory: '60M'
 
 services:
@@ -61,15 +59,12 @@ services:
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=7118
       - POSTGRES_URL=postgres://postgres:password@postgres:5432/rinha2025?pool_max_conns=5
-      - TELEMETRY_ENABLED=true
-      - TELEMETRY_SERVICE_NAME=rinha-service-1
-      - JAEGER_URL=http://jaeger:14268/api/traces
+      - TELEMETRY_ENABLED=false
       - SERVICE_DEFAULT_URL=http://payment-processor-default:8080/payments
       - SERVICE_FALLBACK_URL=http://payment-processor-fallback:8080/payments
       - REDIS_URL=redis://redis:6379
       - REDIS_STREAM_NAME=payments
       - REDIS_STREAM_GROUP=payments-group
-      - ENV=DEBUG
 
   api-2:
     <<: *api
@@ -79,9 +74,7 @@ services:
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=7118
       - POSTGRES_URL=postgres://postgres:password@postgres:5432/rinha2025?pool_max_conns=5
-      - TELEMETRY_ENABLED=true
-      - TELEMETRY_SERVICE_NAME=rinha-service-2
-      - JAEGER_URL=http://jaeger:14268/api/traces
+      - TELEMETRY_ENABLED=false
       - SERVICE_DEFAULT_URL=http://payment-processor-default:8080/payments
       - SERVICE_FALLBACK_URL=http://payment-processor-fallback:8080/payments
       - REDIS_URL=redis://redis:6379
@@ -95,16 +88,13 @@ services:
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=7118
       - POSTGRES_URL=postgres://postgres:password@postgres:5432/rinha2025?pool_max_conns=3
-      - TELEMETRY_ENABLED=true
-      - TELEMETRY_SERVICE_NAME=worker-1
-      - JAEGER_URL=http://jaeger:14268/api/traces
+      - TELEMETRY_ENABLED=false
       - SERVICE_DEFAULT_URL=http://payment-processor-default:8080/payments
       - SERVICE_FALLBACK_URL=http://payment-processor-fallback:8080/payments
       - REDIS_URL=redis://redis:6379
       - REDIS_STREAM_NAME=payments
       - REDIS_STREAM_GROUP=payments-group
       - REDIS_CONSUMER_NAME=worker-1
-
 
   redis:
     image: redis:8-alpine
@@ -139,18 +129,6 @@ services:
         limits:
           cpus: '0.2'
           memory: '100M'
-
-  jaeger:
-    image: jaegertracing/all-in-one:latest
-    ports:
-      - "16686:16686"  # Jaeger UI
-      - "14268:14268"  # Collector HTTP endpoint
-    networks:
-      - app
-    environment:
-      - COLLECTOR_OTLP_ENABLED=true
-    restart: always
-
 
 volumes:
   postgres_data:
