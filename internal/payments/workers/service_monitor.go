@@ -1,8 +1,9 @@
-﻿package workers
+package workers
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -130,7 +131,16 @@ type ServiceWorkFactor struct {
 	FallbackWorkFactor int
 }
 
-func (m *ServiceMonitor) CalculateServiceRequests(n int) ServiceWorkFactor {
+const (
+	feeWeight     = 100.0
+	latencyWeight = 0.01
+)
+
+var (
+	ErrBothServicesUnavailable = errors.New("both services unavailable")
+)
+
+func (m *ServiceMonitor) CalculateServiceRequests(n int) (ServiceWorkFactor, error) {
 	defaultHealth := m.servicesHealth[payments.ServiceTypeDefault]
 	fallbackHealth := m.servicesHealth[payments.ServiceTypeFallback]
 
@@ -141,44 +151,34 @@ func (m *ServiceMonitor) CalculateServiceRequests(n int) ServiceWorkFactor {
 		return float64(rt)
 	}
 
-	calcRate := func(h ServiceHealth, fee float64) float64 {
+	calcScore := func(h ServiceHealth, fee float64) float64 {
 		if h.Failing {
-			return 0 // indisponível
+			return 0
 		}
-		return (1 - fee) * (1000 / normalizeRT(h.MinResponseTime))
+		return 1 / ((fee * feeWeight) + (normalizeRT(h.MinResponseTime) * latencyWeight))
 	}
 
-	lMaxDefault := calcRate(defaultHealth, 0.05)
-	lMaxFallback := calcRate(fallbackHealth, 0.15)
-
-	if n == 1 {
-		if lMaxDefault >= lMaxFallback {
-			return ServiceWorkFactor{DefaultWorkFactor: n, FallbackWorkFactor: 0}
-		} else {
-			return ServiceWorkFactor{DefaultWorkFactor: 0, FallbackWorkFactor: n}
-		}
-	}
+	lMaxDefault := calcScore(defaultHealth, 0.05)
+	lMaxFallback := calcScore(fallbackHealth, 0.15)
 
 	switch {
 	case lMaxDefault == 0 && lMaxFallback == 0:
-		return ServiceWorkFactor{DefaultWorkFactor: n, FallbackWorkFactor: 0}
+		return ServiceWorkFactor{}, ErrBothServicesUnavailable
 	case lMaxDefault == 0:
-		return ServiceWorkFactor{DefaultWorkFactor: 0, FallbackWorkFactor: n}
+		return ServiceWorkFactor{DefaultWorkFactor: 0, FallbackWorkFactor: n}, nil
 	case lMaxFallback == 0:
-		return ServiceWorkFactor{DefaultWorkFactor: n, FallbackWorkFactor: 0}
+		return ServiceWorkFactor{DefaultWorkFactor: n, FallbackWorkFactor: 0}, nil
 	}
 
 	z := lMaxDefault + lMaxFallback
 
-	defaultProb := lMaxDefault / z
-
-	cntDefault := int(math.Round(defaultProb * float64(n)))
+	cntDefault := int(math.Round((lMaxDefault / z) * float64(n)))
 	cntFallback := n - cntDefault
 
 	return ServiceWorkFactor{
 		DefaultWorkFactor:  cntDefault,
 		FallbackWorkFactor: cntFallback,
-	}
+	}, nil
 }
 
 func (m *ServiceMonitor) CheckServiceAvailable(serviceType payments.ServiceType) bool {

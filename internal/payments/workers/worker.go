@@ -1,4 +1,4 @@
-﻿package workers
+package workers
 
 import (
 	"context"
@@ -106,6 +106,16 @@ func (w *PaymentWorker) Process(messages []payments.PaymentMessage) {
 	ctx, span := tr.Start(ctx, "process-batch")
 	defer span.End()
 
+	workFactor, err := w.serviceMonitor.CalculateServiceRequests(len(messages))
+
+	if err != nil {
+		for _, msg := range messages {
+			m := msg
+			w.retryFailedPayment(ctx, m)
+		}
+		return
+	}
+
 	const maxConcurrentRequests = 50
 	sem := make(chan struct{}, maxConcurrentRequests)
 
@@ -118,8 +128,6 @@ func (w *PaymentWorker) Process(messages []payments.PaymentMessage) {
 	span.SetAttributes(
 		attribute.Int("messages_count", len(messages)),
 	)
-
-	workFactor := w.serviceMonitor.CalculateServiceRequests(len(messages))
 
 	span.SetAttributes(
 		attribute.Int("default_factor", workFactor.DefaultWorkFactor),
@@ -152,7 +160,6 @@ func (w *PaymentWorker) Process(messages []payments.PaymentMessage) {
 			targetService = w.defaultPaymentService
 			serviceType = payments.ServiceTypeDefault
 		} else {
-			//w.logger.Info("both services unavailable.")
 			retryCh <- m
 			return
 		}
@@ -169,6 +176,8 @@ func (w *PaymentWorker) Process(messages []payments.PaymentMessage) {
 				attribute.String("payment.correlation_id", m.CorrelationId),
 			),
 		)
+		defer span2.End()
+
 		err := targetService.Process(ctx2, m)
 
 		if err != nil {
@@ -181,7 +190,6 @@ func (w *PaymentWorker) Process(messages []payments.PaymentMessage) {
 			}
 			return
 		}
-		defer span2.End()
 
 		successCh <- payments.Payment{
 			Amount:        m.Amount,
@@ -193,6 +201,7 @@ func (w *PaymentWorker) Process(messages []payments.PaymentMessage) {
 
 	for _, msg := range messages {
 		m := msg
+
 		wg.Add(1)
 
 		serviceType := workBalancer.NextService()
@@ -223,7 +232,7 @@ func (w *PaymentWorker) retryFailedPayment(ctx context.Context, msg payments.Pay
 	go func() {
 		msg.RetryCount++
 
-		const maxRetries = 5
+		const maxRetries = 10
 		if msg.RetryCount > maxRetries {
 			w.logger.Warn("Maximum retry attempts reached, dropping message",
 				"correlationId", msg.CorrelationId,
@@ -232,8 +241,8 @@ func (w *PaymentWorker) retryFailedPayment(ctx context.Context, msg payments.Pay
 		}
 
 		baseDelay := 500 * time.Millisecond * (1 << uint(msg.RetryCount))
-		if baseDelay > 10*time.Second {
-			baseDelay = 10 * time.Second
+		if baseDelay > 5*time.Second {
+			baseDelay = 5 * time.Second
 		}
 
 		jitterRange := float64(baseDelay) * 0.2
