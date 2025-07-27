@@ -1,38 +1,23 @@
-﻿package handlers
+package handlers
 
 import (
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/labstack/echo/v4"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 	"net/http"
+	"rinha/internal/payments"
 )
 
-type PurgePaymentsHandler struct {
-	dbpool *pgxpool.Pool
+type PurgeHandler struct {
+	store *payments.PaymentStore
 }
 
-func NewPurgePaymentsHandler(dbpool *pgxpool.Pool) *PurgePaymentsHandler {
-	return &PurgePaymentsHandler{
-		dbpool: dbpool,
-	}
+func NewPurgeHandler(store *payments.PaymentStore) *PurgeHandler {
+	return &PurgeHandler{store: store}
 }
 
-func (h *PurgePaymentsHandler) Handle(c echo.Context) error {
-	ctx := c.Request().Context()
-	tracer := otel.Tracer("purge-payments-handler")
-	ctx, span := tracer.Start(ctx, "purge-payments-handler", trace.WithAttributes(
-		attribute.String("handler", "purge-payments"),
-	))
-	defer span.End()
-
-	_, err := h.dbpool.Exec(ctx, "TRUNCATE TABLE payments")
+func (h *PurgeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	err := h.store.Purge(r.Context())
 	if err != nil {
-		span.RecordError(err)
-		c.Logger().Errorf("Error purging payments: %v", err)
-		return c.NoContent(http.StatusInternalServerError)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
 	}
-
-	return c.NoContent(http.StatusOK)
+	w.WriteHeader(http.StatusOK)
 }

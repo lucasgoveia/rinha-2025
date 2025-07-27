@@ -4,83 +4,70 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
-	"math"
 	"net/http"
 	"rinha/internal/payments"
 	"time"
 )
 
-// ServiceHealth represents the health check response from a Payment service
-type ServiceHealth struct {
+type ProcessorHealth struct {
 	Failing         bool  `json:"failing"`
 	MinResponseTime int64 `json:"minResponseTime"`
 }
 
-// ServiceMonitor monitors the health and performance of Payment services
-type ServiceMonitor struct {
-	httpClient    *http.Client
-	checkInterval time.Duration
-	logger        *slog.Logger
-	ctx           context.Context
-	cancel        context.CancelFunc
-
-	defaultServiceURL  string
-	fallbackServiceURL string
-
-	servicesHealth map[payments.ServiceType]ServiceHealth
+type ProcessorHealthMonitor struct {
+	logger                   *slog.Logger
+	defaultServiceHealthURL  string
+	fallbackServiceHealthURL string
+	httpClient               *http.Client
+	done                     chan struct{}
+	processorsHealths        map[payments.ProcessorType]ProcessorHealth
 }
 
-func NewServiceMonitor(defaultServiceURL, fallbackServiceURL string, httpClient *http.Client, logger *slog.Logger) *ServiceMonitor {
-	ctx, cancel := context.WithCancel(context.Background())
+func NewServiceMonitor(defaultServiceURL, fallbackServiceURL string, httpClient *http.Client, logger *slog.Logger) *ProcessorHealthMonitor {
 
-	monitor := &ServiceMonitor{
-		httpClient:         httpClient,
-		checkInterval:      5 * time.Second,
-		logger:             logger,
-		ctx:                ctx,
-		cancel:             cancel,
-		defaultServiceURL:  defaultServiceURL,
-		fallbackServiceURL: fallbackServiceURL,
-		servicesHealth:     make(map[payments.ServiceType]ServiceHealth),
+	monitor := &ProcessorHealthMonitor{
+		httpClient:               httpClient,
+		logger:                   logger,
+		defaultServiceHealthURL:  defaultServiceURL,
+		fallbackServiceHealthURL: fallbackServiceURL,
+		processorsHealths:        make(map[payments.ProcessorType]ProcessorHealth),
 	}
 
 	return monitor
 }
 
-func (m *ServiceMonitor) StartMonitoring() {
-	ticker := time.NewTicker(m.checkInterval)
+func (m *ProcessorHealthMonitor) StartMonitoring() {
+	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 
-	m.checkServiceHealth(payments.ServiceTypeDefault)
-	m.checkServiceHealth(payments.ServiceTypeFallback)
+	m.checkProcessorHealth(payments.ProcessorTypeDefault)
+	m.checkProcessorHealth(payments.ProcessorTypeFallback)
 
 	for {
 		select {
 		case <-ticker.C:
-			m.checkServiceHealth(payments.ServiceTypeDefault)
-			m.checkServiceHealth(payments.ServiceTypeFallback)
-		case <-m.ctx.Done():
+			m.checkProcessorHealth(payments.ProcessorTypeDefault)
+			m.checkProcessorHealth(payments.ProcessorTypeFallback)
+		case <-m.done:
 			return
 		}
 	}
 }
 
-func (m *ServiceMonitor) getServiceUrl(serviceType payments.ServiceType) string {
-	if serviceType == payments.ServiceTypeDefault {
-		return m.defaultServiceURL
+func (m *ProcessorHealthMonitor) getServiceUrl(processorType payments.ProcessorType) string {
+	if processorType == payments.ProcessorTypeDefault {
+		return m.defaultServiceHealthURL
 	} else {
-		return m.fallbackServiceURL
+		return m.fallbackServiceHealthURL
 	}
 }
 
-func (m *ServiceMonitor) checkServiceHealth(serviceType payments.ServiceType) {
-	healthURL := fmt.Sprintf("%s/service-health", m.getServiceUrl(serviceType))
+func (m *ProcessorHealthMonitor) checkProcessorHealth(processorType payments.ProcessorType) {
+	healthURL := m.getServiceUrl(processorType)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
 	if err != nil {
 		m.logger.Error("Failed to create health check request", "url", healthURL, "error", err)
@@ -89,116 +76,88 @@ func (m *ServiceMonitor) checkServiceHealth(serviceType payments.ServiceType) {
 
 	resp, err := m.httpClient.Do(req)
 
+	if resp != nil {
+		defer resp.Body.Close()
+	}
+
 	if err != nil {
 		m.logger.Error("Health check request failed", "url", healthURL, "error", err)
-		m.updateServiceStatus(serviceType, true, 0)
 		return
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		m.logger.Error("Health check returned non-OK status", "url", healthURL, "status", resp.StatusCode)
-		m.updateServiceStatus(serviceType, true, 0)
 		return
 	}
 
-	var health ServiceHealth
+	var health ProcessorHealth
 	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
 		m.logger.Error("Failed to decode health check response", "url", healthURL, "error", err)
 		return
 	}
 
-	m.updateServiceStatus(serviceType, health.Failing, health.MinResponseTime)
+	m.updateServiceStatus(processorType, health.Failing, health.MinResponseTime)
 }
 
-func (m *ServiceMonitor) updateServiceStatus(service payments.ServiceType, failing bool, minResponseTime int64) {
-	status := ServiceHealth{
+func (m *ProcessorHealthMonitor) updateServiceStatus(processor payments.ProcessorType, failing bool, minResponseTime int64) {
+	status := ProcessorHealth{
 		Failing:         failing,
 		MinResponseTime: minResponseTime,
 	}
 
-	m.servicesHealth[service] = status
-	m.logger.Debug("Service status updated", "service", service, "failing", failing, "minResponseTime", minResponseTime)
+	m.processorsHealths[processor] = status
+	//m.logger.Debug("Service status updated", "processor", processor, "failing", failing, "minResponseTime", minResponseTime)
 }
 
 // Stop stops the monitoring
-func (m *ServiceMonitor) Stop() {
-	m.cancel()
+func (m *ProcessorHealthMonitor) Stop() {
+	m.done <- struct{}{}
+	close(m.done)
 }
-
-type ServiceWorkFactor struct {
-	DefaultWorkFactor  int
-	FallbackWorkFactor int
-}
-
-const (
-	feeWeight     = 100.0
-	latencyWeight = 0.01
-)
 
 var (
-	ErrBothServicesUnavailable = errors.New("both services unavailable")
+	ErrBothProcessorsUnavailable = errors.New("both services unavailable")
 )
 
-func (m *ServiceMonitor) CalculateServiceRequests(n int) (ServiceWorkFactor, error) {
-	defaultHealth := m.servicesHealth[payments.ServiceTypeDefault]
-	fallbackHealth := m.servicesHealth[payments.ServiceTypeFallback]
+const (
+	maxAcceptableMinResponseTime = 120
+)
 
-	normalizeRT := func(rt int64) float64 {
-		if rt <= 0 {
-			return 1 // 1 ms
-		}
-		return float64(rt)
+func (m *ProcessorHealthMonitor) DetermineProcessor() (payments.ProcessorType, error) {
+	defaultHealth := m.processorsHealths[payments.ProcessorTypeDefault]
+	fallbackHealth := m.processorsHealths[payments.ProcessorTypeFallback]
+
+	defaultFailing := defaultHealth.Failing || defaultHealth.MinResponseTime > maxAcceptableMinResponseTime
+	fallbackFailing := fallbackHealth.Failing || fallbackHealth.MinResponseTime > maxAcceptableMinResponseTime
+
+	if defaultFailing && fallbackFailing {
+		return "", ErrBothProcessorsUnavailable
 	}
 
-	calcScore := func(h ServiceHealth, fee float64) float64 {
-		if h.Failing {
-			return 0
-		}
-		return 1 / ((fee * feeWeight) + (normalizeRT(h.MinResponseTime) * latencyWeight))
+	if defaultFailing {
+		return payments.ProcessorTypeFallback, nil
 	}
 
-	lMaxDefault := calcScore(defaultHealth, 0.05)
-	lMaxFallback := calcScore(fallbackHealth, 0.15)
-
-	switch {
-	case lMaxDefault == 0 && lMaxFallback == 0:
-		return ServiceWorkFactor{}, ErrBothServicesUnavailable
-	case lMaxDefault == 0:
-		return ServiceWorkFactor{DefaultWorkFactor: 0, FallbackWorkFactor: n}, nil
-	case lMaxFallback == 0:
-		return ServiceWorkFactor{DefaultWorkFactor: n, FallbackWorkFactor: 0}, nil
+	if fallbackFailing {
+		return payments.ProcessorTypeDefault, nil
 	}
 
-	z := lMaxDefault + lMaxFallback
+	if defaultHealth.MinResponseTime <= (3 * fallbackHealth.MinResponseTime) {
+		return payments.ProcessorTypeDefault, nil
+	}
 
-	cntDefault := int(math.Round((lMaxDefault / z) * float64(n)))
-	cntFallback := n - cntDefault
-
-	return ServiceWorkFactor{
-		DefaultWorkFactor:  cntDefault,
-		FallbackWorkFactor: cntFallback,
-	}, nil
+	return payments.ProcessorTypeFallback, nil
 }
 
-func (m *ServiceMonitor) CheckServiceAvailable(serviceType payments.ServiceType) bool {
-	if val, ok := m.servicesHealth[serviceType]; ok {
-		return !val.Failing
-	}
-
-	// presume is available
-	return true
-}
-
-func (m *ServiceMonitor) InformFailure(serviceType payments.ServiceType) {
-	var status ServiceHealth
+func (m *ProcessorHealthMonitor) InformFailure(processorType payments.ProcessorType) {
+	var status ProcessorHealth
 	status.Failing = true
 	status.MinResponseTime = 0
 
-	if val, ok := m.servicesHealth[serviceType]; ok {
+	if val, ok := m.processorsHealths[processorType]; ok {
 		status = val
 	}
 
 	status.Failing = true
-	m.updateServiceStatus(serviceType, status.Failing, status.MinResponseTime)
+	m.updateServiceStatus(processorType, status.Failing, status.MinResponseTime)
 }

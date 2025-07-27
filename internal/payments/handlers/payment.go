@@ -1,19 +1,15 @@
-﻿package handlers
+package handlers
 
 import (
-	"encoding/json"
-	"github.com/labstack/echo/v4"
-	"github.com/redis/go-redis/v9"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
+	"github.com/bytedance/sonic"
 	"net/http"
 	"rinha/internal/payments"
+	"rinha/internal/payments/workers"
 	"time"
 )
 
 type PaymentHandler struct {
-	redisClient *redis.Client
+	workerPool *workers.WorkerPool
 }
 
 type paymentRequest struct {
@@ -21,60 +17,32 @@ type paymentRequest struct {
 	CorrelationId string  `json:"correlationId"`
 }
 
-func NewPaymentHandler(redisClient *redis.Client) *PaymentHandler {
-	return &PaymentHandler{
-		redisClient: redisClient,
-	}
+func NewPaymentHandler(workerPool *workers.WorkerPool) *PaymentHandler {
+	return &PaymentHandler{workerPool: workerPool}
 }
 
-func (h *PaymentHandler) Handle(c echo.Context) error {
-	ctx := c.Request().Context()
-	tracer := otel.Tracer("payment-handler")
-	ctx, span := tracer.Start(ctx, "payment-handler", trace.WithAttributes(
-		attribute.String("handler", "payment"),
-	))
-	defer span.End()
-
+func (h *PaymentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var req paymentRequest
-	if err := c.Bind(&req); err != nil {
-		span.RecordError(err)
-		c.Error(err)
-		return c.NoContent(400)
+
+	err := sonic.ConfigFastest.NewDecoder(r.Body).Decode(&req)
+	defer r.Body.Close()
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
 	}
 
-	paymentMsg := payments.PaymentMessage{
+	msg := payments.PaymentMessage{
 		Amount:        req.Amount,
 		CorrelationId: req.CorrelationId,
-		RequestedAt:   time.Now().UTC(),
 		RetryCount:    0,
+		RequestedAt:   time.Now().UTC(),
 	}
 
-	span.SetAttributes(
-		attribute.Float64("payment.amount", req.Amount),
-		attribute.String("payment.correlation_id", req.CorrelationId),
-	)
-
-	data, err := json.Marshal(paymentMsg)
-	if err != nil {
-		span.RecordError(err)
-		c.Logger().Errorf("error while marshalling the payment: %v", err)
-		return c.NoContent(http.StatusInternalServerError)
+	ok := h.workerPool.Submit(&msg)
+	if !ok {
+		w.WriteHeader(http.StatusTooManyRequests) // 429
+		return
 	}
 
-	start := time.Now()
-	_, err = h.redisClient.XAdd(ctx, &redis.XAddArgs{
-		Stream: "payments",
-		Values: map[string]interface{}{
-			"data": string(data),
-		},
-	}).Result()
-	c.Logger().Info("XADD levou %v", time.Since(start))
-
-	if err != nil {
-		span.RecordError(err)
-		c.Logger().Errorf("error while publishing the payment: %v", err)
-		return c.NoContent(http.StatusInternalServerError)
-	}
-	
-	return c.NoContent(http.StatusAccepted)
+	w.WriteHeader(http.StatusAccepted)
 }
