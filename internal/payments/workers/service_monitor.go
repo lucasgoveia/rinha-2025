@@ -22,7 +22,7 @@ type ProcessorHealthMonitor struct {
 	fallbackServiceHealthURL string
 	httpClient               *http.Client
 	done                     chan struct{}
-	processorsHealths        map[payments.ProcessorType]ProcessorHealth
+	processorsHealths        map[payments.ProcessorType]*ProcessorHealth
 	mu                       sync.RWMutex
 }
 
@@ -33,8 +33,11 @@ func NewServiceMonitor(defaultServiceURL, fallbackServiceURL string, httpClient 
 		logger:                   logger,
 		defaultServiceHealthURL:  defaultServiceURL,
 		fallbackServiceHealthURL: fallbackServiceURL,
-		processorsHealths:        make(map[payments.ProcessorType]ProcessorHealth),
+		processorsHealths:        make(map[payments.ProcessorType]*ProcessorHealth, 2),
 	}
+
+	monitor.processorsHealths[payments.ProcessorTypeDefault] = &ProcessorHealth{}
+	monitor.processorsHealths[payments.ProcessorTypeFallback] = &ProcessorHealth{}
 
 	return monitor
 }
@@ -68,9 +71,7 @@ func (m *ProcessorHealthMonitor) getServiceUrl(processorType payments.ProcessorT
 func (m *ProcessorHealthMonitor) checkProcessorHealth(processorType payments.ProcessorType) {
 	healthURL := m.getServiceUrl(processorType)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, healthURL, nil)
 	if err != nil {
 		m.logger.Error("Failed to create health check request", "url", healthURL, "error", err)
 		return
@@ -87,34 +88,32 @@ func (m *ProcessorHealthMonitor) checkProcessorHealth(processorType payments.Pro
 		return
 	}
 
-	defer resp.Body.Close()
-
 	cacheStatus := resp.Header.Get("X-Cache-Status")
 	m.logger.Info("Health check response", "url", healthURL, "status", resp.StatusCode, "cacheStatus", cacheStatus)
 
 	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
 		m.logger.Warn("Health check returned non-OK status", "url", healthURL, "status", resp.StatusCode)
 		return
 	}
 
 	var health ProcessorHealth
 	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
+		_ = resp.Body.Close()
 		m.logger.Error("Failed to decode health check response", "url", healthURL, "error", err)
 		return
 	}
 
+	_ = resp.Body.Close()
 	m.updateServiceStatus(processorType, health.Failing, health.MinResponseTime)
 }
 
 func (m *ProcessorHealthMonitor) updateServiceStatus(processor payments.ProcessorType, failing bool, minResponseTime int64) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	status := ProcessorHealth{
-		Failing:         failing,
-		MinResponseTime: minResponseTime,
-	}
+	m.processorsHealths[processor].Failing = failing
+	m.processorsHealths[processor].MinResponseTime = minResponseTime
+	m.mu.Unlock()
 
-	m.processorsHealths[processor] = status
 	m.logger.Debug("Service status updated", "processor", processor, "failing", failing, "minResponseTime", minResponseTime)
 }
 
@@ -161,16 +160,7 @@ func (m *ProcessorHealthMonitor) DetermineProcessor() (payments.ProcessorType, e
 }
 
 func (m *ProcessorHealthMonitor) InformFailure(processorType payments.ProcessorType) {
-	var status ProcessorHealth
-	status.Failing = true
-	status.MinResponseTime = 0
-
-	m.mu.RLock()
-	if val, ok := m.processorsHealths[processorType]; ok {
-		status = val
-	}
-	m.mu.RUnlock()
-
-	status.Failing = true
-	m.updateServiceStatus(processorType, status.Failing, status.MinResponseTime)
+	m.mu.Lock()
+	m.processorsHealths[processorType].Failing = true
+	m.mu.Unlock()
 }

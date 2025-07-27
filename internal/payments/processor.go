@@ -47,23 +47,21 @@ func (s *PaymentProcessor) Process(ctx context.Context, msg *PaymentMessage) err
 	buf := bufPool.Get().(*bytes.Buffer)
 	buf.Reset()
 
-	defer func() {
-		bufPool.Put(buf)
-	}()
-
 	if err := sonic.ConfigFastest.NewEncoder(buf).Encode(msg); err != nil {
-
+		bufPool.Put(buf)
 		return fmt.Errorf("failed to serialize request body: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.processorURL, io.NopCloser(buf))
 	if err != nil {
+		bufPool.Put(buf)
 		return fmt.Errorf("unable to create http request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := s.httpClient.Do(req)
 
+	bufPool.Put(buf)
 	if resp != nil {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()

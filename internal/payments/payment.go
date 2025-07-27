@@ -9,8 +9,8 @@ type Payment struct {
 	Processor     ProcessorType
 }
 
-func NewPayment(amountCents float64, correlationId string, processor ProcessorType, requestedAt time.Time) Payment {
-	return Payment{
+func NewPayment(amountCents float64, correlationId string, processor ProcessorType, requestedAt time.Time) *Payment {
+	return &Payment{
 		Amount:        amountCents,
 		CorrelationId: correlationId,
 		RequestedAt:   requestedAt,

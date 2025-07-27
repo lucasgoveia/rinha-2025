@@ -4,7 +4,6 @@ import (
 	"context"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"log"
 	"log/slog"
 	"time"
 )
@@ -12,12 +11,12 @@ import (
 const (
 	bufferSize     = 1000
 	maxBatchSize   = 100
-	maxBatchWindow = 2 * time.Millisecond
+	maxBatchWindow = 1 * time.Millisecond
 )
 
 type PaymentStore struct {
 	dbpool *pgxpool.Pool
-	buffer chan Payment
+	buffer chan *Payment
 	done   chan struct{}
 	logger *slog.Logger
 	count  uint64
@@ -26,7 +25,7 @@ type PaymentStore struct {
 func NewPaymentStore(dbpool *pgxpool.Pool, logger *slog.Logger) *PaymentStore {
 	ps := &PaymentStore{
 		dbpool: dbpool,
-		buffer: make(chan Payment, bufferSize),
+		buffer: make(chan *Payment, bufferSize),
 		done:   make(chan struct{}),
 		logger: logger,
 	}
@@ -34,7 +33,20 @@ func NewPaymentStore(dbpool *pgxpool.Pool, logger *slog.Logger) *PaymentStore {
 	return ps
 }
 
-func (ps *PaymentStore) Add(p Payment) bool {
+func (ps *PaymentStore) Add(p *Payment) bool {
+	//_, err := ps.dbpool.Exec(
+	//	context.Background(),
+	//	"INSERT INTO payments (amount, requested_at, service_used, correlation_id) VALUES ($1, $2, $3, $4)",
+	//	p.Amount,
+	//	p.RequestedAt,
+	//	p.Processor,
+	//	p.CorrelationId,
+	//)
+	//if err != nil {
+	//	ps.logger.Warn("failed to insert payment into database", "error", err)
+	//	return false
+	//}
+	//return true
 	select {
 	case ps.buffer <- p:
 		return true
@@ -60,7 +72,6 @@ func (ps *PaymentStore) Summary(ctx context.Context, from, to *time.Time) (*Summ
 	var fallbacksummary ProcessorSummary
 
 	rows, err := ps.dbpool.Query(ctx, query, from, to)
-	defer rows.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -79,6 +90,7 @@ func (ps *PaymentStore) Summary(ctx context.Context, from, to *time.Time) (*Summ
 			fallbacksummary.TotalAmount = totalAmount
 		}
 	}
+	rows.Close()
 
 	return &Summary{
 		Default:  defaultsummary,
@@ -95,10 +107,10 @@ func (ps *PaymentStore) Close() { close(ps.done) }
 
 func (ps *PaymentStore) consume() {
 	var (
-		batch      []Payment
+		batch      []*Payment
 		timer      *time.Timer
 		timerCh    <-chan time.Time
-		addToBatch = func(payment Payment) {
+		addToBatch = func(payment *Payment) {
 			batch = append(batch, payment)
 			if len(batch) == 1 {
 				if timer == nil {
@@ -139,10 +151,11 @@ func (ps *PaymentStore) consume() {
 	}
 }
 
-func (ps *PaymentStore) flush(batch []Payment) {
+func (ps *PaymentStore) flush(batch []*Payment) {
 	ctx := context.Background()
+	ps.logger.Debug("flushing batch", "count", len(batch))
 
-	go func(batchCopy []Payment) {
+	go func(batchCopy []*Payment) {
 		if len(batchCopy) == 1 {
 			_, err := ps.dbpool.Exec(
 				ctx,
@@ -153,7 +166,7 @@ func (ps *PaymentStore) flush(batch []Payment) {
 				batchCopy[0].CorrelationId,
 			)
 			if err != nil {
-				log.Println("failed to insert payment into database", "error", err)
+				ps.logger.Warn("failed to insert payment into database", "error", err)
 			}
 			return
 		}
@@ -167,7 +180,7 @@ func (ps *PaymentStore) flush(batch []Payment) {
 			}),
 		)
 		if err != nil {
-			log.Println("failed to insert payment into database", "error", err)
+			ps.logger.Warn("failed to insert payment into database", "error", err)
 		} else {
 		}
 
