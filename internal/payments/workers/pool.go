@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	queueCapacity  = 131072
+	queueCapacity  = 32768
 	retryCapacity  = 8192
 	maxRetries     = 20
 	baseBackoff    = 500 * time.Millisecond

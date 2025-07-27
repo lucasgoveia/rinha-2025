@@ -12,7 +12,7 @@
     deploy:
       resources:
         limits:
-          cpus: '0.5'
+          cpus: '0.55'
           memory: '60M'
 
 services:
@@ -36,7 +36,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.3'
+          cpus: '0.25'
           memory: '80M'
 
   server1:
@@ -72,8 +72,6 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=password
       - POSTGRES_DB=rinha2025
-    ports:
-      - "54320:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
@@ -83,7 +81,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.3'
+          cpus: '0.15'
           memory: '128M'
 
 volumes:

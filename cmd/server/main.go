@@ -6,6 +6,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"rinha/config"
@@ -21,23 +22,24 @@ func main() {
 		log.Fatal(err)
 	}
 
-	//transport := &http.Transport{
-	//	DialContext: (&net.Dialer{
-	//		Timeout:   30 * time.Millisecond,
-	//		KeepAlive: 30 * time.Second,
-	//	}).DialContext,
-	//
-	//	MaxIdleConns:        256,
-	//	MaxIdleConnsPerHost: 256,
-	//	MaxConnsPerHost:     256,
-	//
-	//	IdleConnTimeout:    90 * time.Second,
-	//	DisableCompression: true,
-	//	ForceAttemptHTTP2:  false,
-	//}
+	transport := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Millisecond,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+
+		MaxIdleConns:        256,
+		MaxIdleConnsPerHost: 256,
+		MaxConnsPerHost:     256,
+
+		IdleConnTimeout:    90 * time.Second,
+		DisableCompression: true,
+		ForceAttemptHTTP2:  false,
+	}
 
 	httpClient := &http.Client{
-		Timeout: 500 * time.Millisecond,
+		Transport: transport,
+		Timeout:   180 * time.Millisecond,
 	}
 
 	logger := setupLogger()
@@ -91,7 +93,7 @@ func setupDbPool(appConfig *config.AppConfig) *pgxpool.Pool {
 }
 
 func setupLogger() *slog.Logger {
-	logLevel := slog.LevelDebug
+	logLevel := slog.LevelWarn
 
 	handler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: logLevel,

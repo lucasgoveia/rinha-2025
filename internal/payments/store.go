@@ -30,30 +30,18 @@ func NewPaymentStore(dbpool *pgxpool.Pool, logger *slog.Logger) *PaymentStore {
 		done:   make(chan struct{}),
 		logger: logger,
 	}
-	//go ps.consume()
+	go ps.consume()
 	return ps
 }
 
 func (ps *PaymentStore) Add(p Payment) bool {
-	ps.count = ps.count + 1
-
-	ps.logger.Info("adding payment", "n", ps.count, "to the database")
-
-	ctx := context.Background()
-	_, err := ps.dbpool.Exec(
-		ctx,
-		"INSERT INTO payments (amount, requested_at, service_used, correlation_id) VALUES ($1, $2, $3, $4)",
-		p.Amount,
-		p.RequestedAt,
-		p.Processor,
-		p.CorrelationId,
-	)
-	if err != nil {
-		ps.logger.Error("failed to insert payment into database", "error", err)
-		log.Printf("failed to insert payment into database: %v\n", err)
+	select {
+	case ps.buffer <- p:
+		return true
+	default:
+		ps.logger.Warn("payment buffer is full, dropping payment", "correlationId", p.CorrelationId)
 		return false
 	}
-	return true
 }
 
 func (ps *PaymentStore) Summary(ctx context.Context, from, to *time.Time) (*Summary, error) {
