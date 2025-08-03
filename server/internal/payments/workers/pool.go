@@ -49,11 +49,10 @@ type WorkerPool struct {
 	defaultProcessor  *payments.PaymentProcessor
 	fallbackProcessor *payments.PaymentProcessor
 	store             *payments.PaymentStore
-	healthMonitor     *ProcessorHealthMonitor
 	logger            *slog.Logger
 }
 
-func NewWorkerPool(def, fallbackProcessor *payments.PaymentProcessor, store *payments.PaymentStore, healthMonitor *ProcessorHealthMonitor, logger *slog.Logger) *WorkerPool {
+func NewWorkerPool(def, fallbackProcessor *payments.PaymentProcessor, store *payments.PaymentStore, logger *slog.Logger) *WorkerPool {
 	return &WorkerPool{
 		rng:               rand.New(rand.NewSource(time.Now().UnixNano())),
 		queue:             make(chan *payments.PaymentMessage, queueCapacity),
@@ -61,7 +60,6 @@ func NewWorkerPool(def, fallbackProcessor *payments.PaymentProcessor, store *pay
 		defaultProcessor:  def,
 		fallbackProcessor: fallbackProcessor,
 		store:             store,
-		healthMonitor:     healthMonitor,
 		logger:            logger,
 	}
 }
@@ -97,26 +95,22 @@ func (p *WorkerPool) run() {
 
 func (p *WorkerPool) process(ctx context.Context, msg *payments.PaymentMessage) {
 	m := msg
+	processorType := payments.ProcessorTypeDefault
 
-	processorType, err := p.healthMonitor.DetermineProcessor()
-	processor := p.defaultProcessor
-
-	if err != nil {
-		p.logger.Debug("Both processors unavailable retrying")
-		p.retry(m)
-		return
-	}
-
-	if processorType == payments.ProcessorTypeFallback {
-		processor = p.fallbackProcessor
-	}
-
-	err = processor.Process(ctx, m)
+	// Try default processor first
+	err := p.defaultProcessor.Process(ctx, m)
 	if err != nil && errors.Is(err, payments.ErrUnavailableProcessor) {
-		p.logger.Debug("Processor unavailable, retrying")
-		p.healthMonitor.InformFailure(processorType)
-		p.retry(m)
-		return
+		p.logger.Debug("Default processor unavailable, trying fallback")
+
+		// Try fallback processor if default fails
+		processorType = payments.ProcessorTypeFallback
+		err = p.fallbackProcessor.Process(ctx, m)
+
+		if err != nil && errors.Is(err, payments.ErrUnavailableProcessor) {
+			p.logger.Debug("Fallback processor unavailable, retrying")
+			//p.retry(m)
+			return
+		}
 	}
 
 	p.store.Add(payments.NewPayment(msg.Amount, msg.CorrelationId, processorType, msg.RequestedAt))

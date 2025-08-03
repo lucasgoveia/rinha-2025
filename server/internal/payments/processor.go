@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/bytedance/sonic"
 	"io"
+	"log/slog"
 	"net/http"
 	"sync"
 )
@@ -27,13 +28,15 @@ type PaymentProcessor struct {
 	processorURL  string
 	processorType ProcessorType
 	httpClient    *http.Client
+	logger        *slog.Logger
 }
 
-func NewPaymentProcessor(httpClient *http.Client, serviceURL string, serviceType ProcessorType) *PaymentProcessor {
+func NewPaymentProcessor(httpClient *http.Client, serviceURL string, serviceType ProcessorType, logger *slog.Logger) *PaymentProcessor {
 	return &PaymentProcessor{
 		httpClient:    httpClient,
 		processorURL:  serviceURL,
 		processorType: serviceType,
+		logger:        logger,
 	}
 }
 
@@ -68,6 +71,7 @@ func (s *PaymentProcessor) Process(ctx context.Context, msg *PaymentMessage) err
 	}
 
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		s.logger.Warn("payment processing request timed out", "processor", s.processorType, "url", s.processorURL, "error", err)
 		return ErrUnavailableProcessor
 	}
 

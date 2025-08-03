@@ -1,7 +1,7 @@
 ﻿x-service-templates:
   server: &server
     build:
-      context: .
+      context: ./server
       dockerfile: Dockerfile
     restart: always
     depends_on:
@@ -16,18 +16,17 @@
           memory: '60M'
 
 services:
-  nginx:
-    image: nginx:alpine
+  pingora:
+    build:
+      context: ./loadbalancer
+      dockerfile: Dockerfile
     ports:
-      - "9999:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - "9999:9999"
     depends_on:
       - server1
       - server2
     networks:
       - backend
-      - payment-processor
     restart: always
     ulimits:
       nofile:
@@ -78,11 +77,11 @@ services:
     networks:
       - backend
     restart: always
-    deploy:
-      resources:
-        limits:
-          cpus: '0.15'
-          memory: '128M'
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '0.15'
+    #       memory: '128M'
 
 volumes:
   postgres_data:

@@ -24,7 +24,7 @@ func main() {
 
 	transport := &http.Transport{
 		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Millisecond,
+			Timeout:   100 * time.Millisecond,
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
 
@@ -39,17 +39,13 @@ func main() {
 
 	httpClient := &http.Client{
 		Transport: transport,
-		Timeout:   180 * time.Millisecond,
+		Timeout:   10 * time.Second,
 	}
 
 	logger := setupLogger()
 
-	healthMonitor := workers.NewServiceMonitor(appConfig.Service.DefaultHealthURL, appConfig.Service.FallbackHealthURL, httpClient, logger)
-	go healthMonitor.StartMonitoring()
-	defer healthMonitor.Stop()
-
-	defaultProcessor := payments.NewPaymentProcessor(httpClient, appConfig.Service.DefaultURL, payments.ProcessorTypeDefault)
-	fallbackProcessor := payments.NewPaymentProcessor(httpClient, appConfig.Service.FallbackURL, payments.ProcessorTypeFallback)
+	defaultProcessor := payments.NewPaymentProcessor(httpClient, appConfig.Service.DefaultURL, payments.ProcessorTypeDefault, logger)
+	fallbackProcessor := payments.NewPaymentProcessor(httpClient, appConfig.Service.FallbackURL, payments.ProcessorTypeFallback, logger)
 
 	dbpool := setupDbPool(appConfig)
 	defer dbpool.Close()
@@ -58,7 +54,7 @@ func main() {
 	pStore := payments.NewPaymentStore(dbpool, logger)
 
 	// Create the worker pool with the store
-	workerPool := workers.NewWorkerPool(defaultProcessor, fallbackProcessor, pStore, healthMonitor, logger)
+	workerPool := workers.NewWorkerPool(defaultProcessor, fallbackProcessor, pStore, logger)
 	go workerPool.Start()
 	defer workerPool.Stop()
 
