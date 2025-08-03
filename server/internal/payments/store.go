@@ -106,41 +106,22 @@ func (ps *PaymentStore) Purge(ctx context.Context) error {
 func (ps *PaymentStore) Close() { close(ps.done) }
 
 func (ps *PaymentStore) consume() {
-	var (
-		batch      []*Payment
-		timer      *time.Timer
-		timerCh    <-chan time.Time
-		addToBatch = func(payment *Payment) {
-			batch = append(batch, payment)
-			if len(batch) == 1 {
-				if timer == nil {
-					timer = time.NewTimer(maxBatchWindow)
-				} else {
-					timer.Reset(maxBatchWindow)
-				}
-				timerCh = timer.C
-			}
-			if len(batch) >= maxBatchSize {
-				ps.flush(batch)
-				batch = nil
-				if timer != nil {
-					timer.Stop()
-				}
-				timerCh = nil
-			}
-		}
-	)
+	ticker := time.NewTicker(maxBatchWindow)
+	var batch []*Payment
 
 	for {
 		select {
 		case payment := <-ps.buffer:
-			addToBatch(payment)
-		case <-timerCh:
+			batch = append(batch, payment)
+			if len(batch) >= maxBatchSize {
+				ps.flush(batch)
+				batch = nil
+			}
+		case <-ticker.C:
 			if len(batch) > 0 {
 				ps.flush(batch)
 				batch = nil
 			}
-			timerCh = nil
 		case <-ps.done:
 			if len(batch) > 0 {
 				ps.flush(batch)

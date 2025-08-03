@@ -11,10 +11,17 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o server ./
 
 FROM alpine:latest
 
+ARG APP_UID=1000
+RUN addgroup -g ${APP_UID} appgroup && \
+    adduser -u ${APP_UID} -G appgroup -D appuser
+
 WORKDIR /app
 
 COPY --from=builder /app/server .
 
+RUN chown -R appuser:appgroup /tmp
+
+USER appuser
 EXPOSE 7118
 
 CMD ["./server"]

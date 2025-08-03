@@ -70,11 +70,19 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	logger.Info("starting server on port 7118, listening for requests")
-	err = http.ListenAndServe(":7118", mux)
+	//logger.Info("starting server on port 7118, listening for requests")
+	l, err := net.Listen("unix", appConfig.Server.Socket)
 	if err != nil {
 		log.Fatal(err)
 	}
+	err = http.Serve(l, mux)
+	if err != nil {
+		log.Fatal(err)
+	}
+	//err = http.ListenAndServe(":7118", mux)
+	//if err != nil {
+	//	log.Fatal(err)
+	//}
 }
 
 func setupDbPool(appConfig *config.AppConfig) *pgxpool.Pool {

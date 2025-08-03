@@ -20,7 +20,7 @@ const (
 	jitterFraction = 0.20 // 20 %
 )
 
-var numWorkers = runtime.GOMAXPROCS(0) * 8
+var numWorkers = runtime.GOMAXPROCS(0) * 1
 
 type retryItem struct {
 	msg         *payments.PaymentMessage
@@ -108,7 +108,7 @@ func (p *WorkerPool) process(ctx context.Context, msg *payments.PaymentMessage) 
 
 		if err != nil && errors.Is(err, payments.ErrUnavailableProcessor) {
 			p.logger.Debug("Fallback processor unavailable, retrying")
-			//p.retry(m)
+			p.retry(m)
 			return
 		}
 	}

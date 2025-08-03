@@ -6,8 +6,9 @@ import (
 )
 
 type ServerConfig struct {
-	Port int    `mapstructure:"port"`
-	Host string `mapstructure:"host"`
+	Port   int    `mapstructure:"port"`
+	Host   string `mapstructure:"host"`
+	Socket string `mapstructure:"socket"`
 }
 
 type PostgresConfig struct {
@@ -43,6 +44,7 @@ func LoadConfig() (*AppConfig, error) {
 	_ = viper.BindEnv("service.fallback_url", "SERVICE_FALLBACK_URL")
 	_ = viper.BindEnv("service.default_health_url", "SERVICE_DEFAULT_HEALTH_URL")
 	_ = viper.BindEnv("service.fallback_health_url", "SERVICE_FALLBACK_HEALTH_URL")
+	_ = viper.BindEnv("server.socket", "SERVER_SOCKET")
 
 	var config AppConfig
 	if err := viper.Unmarshal(&config); err != nil {

@@ -1,0 +1,24 @@
+﻿version: '3.8'
+
+services:
+  pingora-loadbalancer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "9999:9999"
+    networks:
+      - backend
+      - payment-processor
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: '80M'
+
+networks:
+  backend:
+    external: true
+  payment-processor:
+    external: true

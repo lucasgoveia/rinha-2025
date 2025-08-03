@@ -3,6 +3,9 @@
     build:
       context: ./server
       dockerfile: Dockerfile
+      args:
+        APP_UID: 1000
+    user: "1000:1000"
     restart: always
     depends_on:
       - postgres
@@ -14,12 +17,18 @@
         limits:
           cpus: '0.55'
           memory: '60M'
+    volumes:
+      - pg_socket:/var/run/postgresql
+      - backend:/tmp/
 
 services:
   pingora:
     build:
       context: ./loadbalancer
       dockerfile: Dockerfile
+      args:
+        APP_UID: 1000
+    user: "1000:1000"
     ports:
       - "9999:9999"
     depends_on:
@@ -37,29 +46,32 @@ services:
         limits:
           cpus: '0.25'
           memory: '80M'
+    volumes:
+      - backend:/tmp/
 
   server1:
     <<: *server
     container_name: server1
     hostname: server1
     environment:
+      - SERVER_SOCKET=/tmp/server1.sock
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=7118
-      - POSTGRES_URL=postgres://postgres:password@postgres:5432/rinha2025?pool_max_conns=10&pool_min_conns=2&pool_max_conn_idle_time=30s&pool_max_conn_lifetime=5m&pool_health_check_period=30s
+      - POSTGRES_URL=postgres://postgres:password@/rinha2025?host=/var/run/postgresql&pool_max_conns=10&pool_min_conns=2&pool_max_conn_idle_time=30s&pool_max_conn_lifetime=5m&pool_health_check_period=30s
       - SERVICE_DEFAULT_URL=http://payment-processor-default:8080/payments
       - SERVICE_FALLBACK_URL=http://payment-processor-fallback:8080/payments
       - SERVICE_DEFAULT_HEALTH_URL=http://nginx:9000/default/payments/service-health
       - SERVICE_FALLBACK_HEALTH_URL=http://nginx:9000/fallback/payments/service-health
-
 
   server2:
     <<: *server
     container_name: server2
     hostname: server2
     environment:
+      - SERVER_SOCKET=/tmp/server2.sock
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=7118
-      - POSTGRES_URL=postgres://postgres:password@postgres:5432/rinha2025?pool_max_conns=10&pool_min_conns=2&pool_max_conn_idle_time=30s&pool_max_conn_lifetime=5m&pool_health_check_period=30s
+      - POSTGRES_URL=postgres://postgres:password@/rinha2025?host=/var/run/postgresql&pool_max_conns=10&pool_min_conns=2&pool_max_conn_idle_time=30s&pool_max_conn_lifetime=5m&pool_health_check_period=30s
       - SERVICE_DEFAULT_URL=http://payment-processor-default:8080/payments
       - SERVICE_FALLBACK_URL=http://payment-processor-fallback:8080/payments
       - SERVICE_DEFAULT_HEALTH_URL=http://nginx:9000/default/payments/service-health
@@ -74,17 +86,20 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - pg_socket:/var/run/postgresql
     networks:
       - backend
     restart: always
-    # deploy:
-    #   resources:
-    #     limits:
-    #       cpus: '0.15'
-    #       memory: '128M'
+    deploy:
+      resources:
+        limits:
+          cpus: '0.15'
+          memory: '128M'
 
 volumes:
   postgres_data:
+  pg_socket:
+  backend:
 
 networks:
   backend:
