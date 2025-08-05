@@ -16,11 +16,11 @@ const (
 	retryCapacity  = 8192
 	maxRetries     = 20
 	baseBackoff    = 500 * time.Millisecond
-	maxBackoff     = 2 * time.Second
+	maxBackoff     = 5 * time.Second
 	jitterFraction = 0.20 // 20 %
 )
 
-var numWorkers = runtime.GOMAXPROCS(0) * 1
+var numWorkers = runtime.GOMAXPROCS(0) * 8
 
 type retryItem struct {
 	msg         *payments.PaymentMessage
@@ -50,9 +50,10 @@ type WorkerPool struct {
 	fallbackProcessor *payments.PaymentProcessor
 	store             *payments.PaymentStore
 	logger            *slog.Logger
+	healthMonitor     *ProcessorHealthMonitor
 }
 
-func NewWorkerPool(def, fallbackProcessor *payments.PaymentProcessor, store *payments.PaymentStore, logger *slog.Logger) *WorkerPool {
+func NewWorkerPool(def, fallbackProcessor *payments.PaymentProcessor, store *payments.PaymentStore, logger *slog.Logger, healthMonitor *ProcessorHealthMonitor) *WorkerPool {
 	return &WorkerPool{
 		rng:               rand.New(rand.NewSource(time.Now().UnixNano())),
 		queue:             make(chan *payments.PaymentMessage, queueCapacity),
@@ -61,6 +62,7 @@ func NewWorkerPool(def, fallbackProcessor *payments.PaymentProcessor, store *pay
 		fallbackProcessor: fallbackProcessor,
 		store:             store,
 		logger:            logger,
+		healthMonitor:     healthMonitor,
 	}
 }
 
@@ -95,25 +97,41 @@ func (p *WorkerPool) run() {
 
 func (p *WorkerPool) process(ctx context.Context, msg *payments.PaymentMessage) {
 	m := msg
-	processorType := payments.ProcessorTypeDefault
+	processorType, err := p.healthMonitor.DetermineProcessor()
 
-	// Try default processor first
-	err := p.defaultProcessor.Process(ctx, m)
-	if err != nil && errors.Is(err, payments.ErrUnavailableProcessor) {
-		p.logger.Debug("Default processor unavailable, trying fallback")
-
-		// Try fallback processor if default fails
-		processorType = payments.ProcessorTypeFallback
-		err = p.fallbackProcessor.Process(ctx, m)
-
-		if err != nil && errors.Is(err, payments.ErrUnavailableProcessor) {
-			p.logger.Debug("Fallback processor unavailable, retrying")
-			p.retry(m)
-			return
-		}
+	if err != nil && errors.Is(err, ErrBothProcessorsUnavailable) {
+		p.retry(m)
 	}
 
-	p.store.Add(payments.NewPayment(msg.Amount, msg.CorrelationId, processorType, msg.RequestedAt))
+	if processorType == payments.ProcessorTypeDefault {
+		p.processDefault(ctx, m)
+		return
+	} else if processorType == payments.ProcessorTypeFallback {
+		p.processFallback(ctx, m)
+		return
+	}
+}
+
+func (p *WorkerPool) processDefault(ctx context.Context, msg *payments.PaymentMessage) {
+	err := p.defaultProcessor.Process(ctx, msg)
+	if err != nil && errors.Is(err, payments.ErrUnavailableProcessor) {
+		p.logger.Debug("Default processor unavailable")
+		p.retry(msg)
+		return
+	}
+
+	p.store.Add(payments.NewPayment(msg.Amount, msg.CorrelationId, payments.ProcessorTypeDefault, msg.RequestedAt))
+}
+
+func (p *WorkerPool) processFallback(ctx context.Context, msg *payments.PaymentMessage) {
+	err := p.fallbackProcessor.Process(ctx, msg)
+	if err != nil && errors.Is(err, payments.ErrUnavailableProcessor) {
+		p.logger.Debug("Fallback processor unavailable")
+		p.retry(msg)
+		return
+	}
+
+	p.store.Add(payments.NewPayment(msg.Amount, msg.CorrelationId, payments.ProcessorTypeFallback, msg.RequestedAt))
 }
 
 func (p *WorkerPool) retry(msg *payments.PaymentMessage) {

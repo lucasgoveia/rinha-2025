@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"context"
@@ -12,13 +12,16 @@ import (
 	"rinha/config"
 	"rinha/internal/messages"
 	"rinha/internal/payments"
-	"rinha/internal/payments/handlers"
+	"rinha/internal/payments/workers"
 	"time"
 )
 
 func main() {
+	logger := setupLogger()
+
 	appConfig, err := config.LoadConfig()
 	if err != nil {
+		logger.Error("Failed to load config", "err", err)
 		log.Fatal(err)
 	}
 
@@ -39,49 +42,37 @@ func main() {
 
 	httpClient := &http.Client{
 		Transport: transport,
-		Timeout:   10 * time.Second,
+		Timeout:   180 * time.Millisecond,
 	}
 
-	logger := setupLogger()
+	defaultProcessor := payments.NewPaymentProcessor(httpClient, appConfig.Service.DefaultURL, payments.ProcessorTypeDefault, logger)
+	fallbackProcessor := payments.NewPaymentProcessor(httpClient, appConfig.Service.FallbackURL, payments.ProcessorTypeFallback, logger)
 
 	dbpool := setupDbPool(appConfig)
 	defer dbpool.Close()
 
-	// Create the payment store
 	pStore := payments.NewPaymentStore(dbpool, logger)
 
+	healthMonitor := workers.NewServiceMonitor(appConfig.Service.DefaultHealthURL, appConfig.Service.FallbackHealthURL, httpClient, logger)
+	go healthMonitor.StartMonitoring()
+
+	workerPool := workers.NewWorkerPool(defaultProcessor, fallbackProcessor, pStore, logger, healthMonitor)
+	go workerPool.Start()
+	defer workerPool.Stop()
+
 	socket := "/tmp/payments-stream.sock"
-	publisher, err := messages.NewPublisher(socket, 4) // até 4 conexões mantidas
+
+	// --- start consumer (único) ---
+	receiver := messages.NewReceiver(socket, workerPool, logger)
+
+	err = receiver.Start()
 	if err != nil {
-		log.Fatal(err)
+		logger.Error("Failed to start receiver", "err", err)
+		os.Exit(1)
+		return
 	}
 
-	mux := http.NewServeMux()
-	paymentHandler := handlers.NewPaymentHandler(publisher)
-	summaryHandler := handlers.NewSummaryHandler(pStore, httpClient)
-	purgeHandler := handlers.NewPurgeHandler(pStore)
-
-	mux.Handle("/payments", paymentHandler)
-	mux.Handle("/payments-summary", summaryHandler)
-	mux.Handle("/purge-payments", purgeHandler)
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	//logger.Info("starting server on port 7118, listening for requests")
-	_ = os.Remove(appConfig.Server.Socket)
-	l, err := net.Listen("unix", appConfig.Server.Socket)
-	if err != nil {
-		log.Fatal(err)
-	}
-	err = http.Serve(l, mux)
-	if err != nil {
-		log.Fatal(err)
-	}
-	//err = http.ListenAndServe(":7118", mux)
-	//if err != nil {
-	//	log.Fatal(err)
-	//}
+	defer receiver.Stop()
 }
 
 func setupDbPool(appConfig *config.AppConfig) *pgxpool.Pool {
@@ -96,7 +87,7 @@ func setupDbPool(appConfig *config.AppConfig) *pgxpool.Pool {
 }
 
 func setupLogger() *slog.Logger {
-	logLevel := slog.LevelWarn
+	logLevel := slog.LevelInfo
 
 	handler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: logLevel,

@@ -3,21 +3,29 @@ package handlers
 import (
 	"github.com/bytedance/sonic"
 	"net/http"
+	"rinha/internal/messages"
 	"rinha/internal/payments"
-	"rinha/internal/payments/workers"
+	"sync"
 	"time"
 )
 
 type PaymentHandler struct {
-	workerPool *workers.WorkerPool
+	publisher *messages.Publisher
 }
 
-func NewPaymentHandler(workerPool *workers.WorkerPool) *PaymentHandler {
-	return &PaymentHandler{workerPool: workerPool}
+func NewPaymentHandler(publisher *messages.Publisher) *PaymentHandler {
+	return &PaymentHandler{publisher: publisher}
+}
+
+var paymentMsgPool = sync.Pool{
+	New: func() any {
+		return new(payments.PaymentMessage)
+	},
 }
 
 func (h *PaymentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	var msg payments.PaymentMessage
+	msg := paymentMsgPool.Get().(*payments.PaymentMessage)
+	*msg = payments.PaymentMessage{}
 
 	err := sonic.ConfigFastest.NewDecoder(r.Body).Decode(&msg)
 	if err != nil {
@@ -31,11 +39,12 @@ func (h *PaymentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	msg.RetryCount = 0
 	msg.RequestedAt = time.Now().UTC()
 
-	ok := h.workerPool.Submit(&msg)
-	if !ok {
-		w.WriteHeader(http.StatusTooManyRequests) // 429
+	if err := h.publisher.Publish(msg); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		paymentMsgPool.Put(msg)
 		return
 	}
 
 	w.WriteHeader(http.StatusAccepted)
+	paymentMsgPool.Put(msg)
 }

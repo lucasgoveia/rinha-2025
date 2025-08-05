@@ -1,0 +1,27 @@
+﻿FROM golang:1.24-alpine AS builder
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY .. .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o worker ./cmd/worker
+
+
+FROM alpine:latest
+
+ARG APP_UID=1000
+RUN addgroup -g ${APP_UID} appgroup && \
+    adduser -u ${APP_UID} -G appgroup -D appuser
+
+WORKDIR /app
+
+COPY --from=builder /app/worker .
+
+RUN chown -R appuser:appgroup /tmp
+
+USER appuser
+EXPOSE 7118
+
+CMD ["./worker"]

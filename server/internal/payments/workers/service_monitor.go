@@ -43,7 +43,7 @@ func NewServiceMonitor(defaultServiceURL, fallbackServiceURL string, httpClient 
 }
 
 func (m *ProcessorHealthMonitor) StartMonitoring() {
-	ticker := time.NewTicker(1000 * time.Millisecond)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	m.checkProcessorHealth(payments.ProcessorTypeDefault)
@@ -128,7 +128,7 @@ var (
 )
 
 const (
-	maxAcceptableMinResponseTime = 120
+	maxAcceptableMinResponseTime = 80
 )
 
 func (m *ProcessorHealthMonitor) DetermineProcessor() (payments.ProcessorType, error) {
