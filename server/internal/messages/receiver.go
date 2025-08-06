@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"log"
 	"log/slog"
 	"net"
 	"os"
@@ -43,6 +44,11 @@ func (r *Receiver) Start() error {
 	if err != nil {
 		return err
 	}
+
+	if err := os.Chmod(r.socketPath, 0o666); err != nil {
+		log.Fatal(err)
+	}
+
 	r.ln = ln
 
 	r.wg.Add(1)
@@ -88,6 +94,9 @@ func (r *Receiver) readProducer(conn net.Conn) {
 		if err := json.Unmarshal(sc.Bytes(), &msg); err != nil {
 			continue
 		}
+
+		msg.RequestedAt = time.Now().UTC()
+		msg.RetryCount = 0
 
 		select {
 		case <-r.ctx.Done():

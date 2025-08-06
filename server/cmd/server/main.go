@@ -68,12 +68,17 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	//logger.Info("starting server on port 7118, listening for requests")
 	_ = os.Remove(appConfig.Server.Socket)
+	
 	l, err := net.Listen("unix", appConfig.Server.Socket)
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	if err := os.Chmod(appConfig.Server.Socket, 0o666); err != nil {
+		log.Fatal(err)
+	}
+
 	err = http.Serve(l, mux)
 	if err != nil {
 		log.Fatal(err)

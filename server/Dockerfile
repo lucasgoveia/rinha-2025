@@ -1,5 +1,10 @@
 ﻿FROM golang:1.24-alpine AS builder
 
+ARG APP_UID=1000
+ARG APP_GID=1000
+RUN addgroup -g ${APP_GID} app && adduser -D -G app -u ${APP_UID} app
+
+USER app
 WORKDIR /app
 
 COPY go.mod go.sum ./
@@ -12,16 +17,16 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o server ./
 FROM alpine:latest
 
 ARG APP_UID=1000
-RUN addgroup -g ${APP_UID} appgroup && \
-    adduser -u ${APP_UID} -G appgroup -D appuser
+ARG APP_GID=1000
 
+RUN addgroup -g ${APP_GID} app && adduser -D -G app -u ${APP_UID} app \
+ && mkdir -p /app \
+ && chown -R ${APP_UID}:${APP_GID} /app /tmp
+
+USER app
 WORKDIR /app
 
 COPY --from=builder /app/server .
 
-RUN chown -R appuser:appgroup /tmp
-
-USER appuser
 EXPOSE 7118
-
 CMD ["./server"]

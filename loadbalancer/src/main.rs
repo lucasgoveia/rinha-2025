@@ -1,11 +1,11 @@
 mod uds_round_robin;
 
+use crate::uds_round_robin::UdsRoundRobin;
 use async_trait::async_trait;
 use pingora::prelude::*;
 use std::sync::Arc;
-use crate::uds_round_robin::UdsRoundRobin;
 
-pub struct  LB(Arc<UdsRoundRobin>);
+pub struct LB(Arc<UdsRoundRobin>);
 
 #[async_trait]
 impl ProxyHttp for LB {
@@ -14,10 +14,15 @@ impl ProxyHttp for LB {
         ()
     }
 
-    async fn upstream_peer(&self, _session: &mut Session, _ctx: &mut Self::CTX) -> Result<Box<HttpPeer>> {
-        let path = self.0.select().ok_or_else(|| {
-            Error::new(ErrorType::InternalError)
-        })?;
+    async fn upstream_peer(
+        &self,
+        _session: &mut Session,
+        _ctx: &mut Self::CTX,
+    ) -> Result<Box<HttpPeer>> {
+        let path = self
+            .0
+            .select()
+            .ok_or_else(|| Error::new(ErrorType::InternalError))?;
 
         let peer = Box::new(HttpPeer::new_uds(path.as_str(), false, String::new())?);
 
@@ -33,9 +38,6 @@ fn main() {
         "/tmp/server1.sock".to_string(),
         "/tmp/server2.sock".to_string(),
     ]);
-
-    // let upstreams =
-    //     LoadBalancer::try_from_iter(["/tmp/server1.sock", "/tmp/server2.sock"]).unwrap();
 
     let mut lb = http_proxy_service(&my_server.configuration, LB(Arc::new(uds_balancer)));
     lb.add_tcp("0.0.0.0:9999");

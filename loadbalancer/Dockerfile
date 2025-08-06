@@ -6,6 +6,7 @@ RUN apk add --no-cache \
         cmake
 
 WORKDIR /usr/src/loadbalancer
+
 COPY . .
 ENV RUSTFLAGS="-C target-cpu=native"
 RUN cargo build --release --locked
@@ -13,13 +14,13 @@ RUN cargo build --release --locked
 FROM alpine:latest
 
 ARG APP_UID=1000
-RUN addgroup -g ${APP_UID} appgroup && \
-    adduser -u ${APP_UID} -G appgroup -D appuser
+ARG APP_GID=1000
+RUN addgroup -g ${APP_GID} app && adduser -D -G app -u ${APP_UID} app \
+ && mkdir -p /app \
+ && chown -R ${APP_UID}:${APP_GID} /app /tmp
 
+USER app
 WORKDIR /app
 COPY --from=builder /usr/src/loadbalancer/target/release/loadbalancer /app/
 
-RUN chown -R appuser:appgroup /tmp
-
-USER appuser
 CMD ["./loadbalancer"]

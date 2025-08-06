@@ -1,12 +1,9 @@
 package handlers
 
 import (
-	"github.com/bytedance/sonic"
+	"io"
 	"net/http"
 	"rinha/internal/messages"
-	"rinha/internal/payments"
-	"sync"
-	"time"
 )
 
 type PaymentHandler struct {
@@ -17,34 +14,19 @@ func NewPaymentHandler(publisher *messages.Publisher) *PaymentHandler {
 	return &PaymentHandler{publisher: publisher}
 }
 
-var paymentMsgPool = sync.Pool{
-	New: func() any {
-		return new(payments.PaymentMessage)
-	},
-}
-
 func (h *PaymentHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	msg := paymentMsgPool.Get().(*payments.PaymentMessage)
-	*msg = payments.PaymentMessage{}
-
-	err := sonic.ConfigFastest.NewDecoder(r.Body).Decode(&msg)
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<8))
 	if err != nil {
 		_ = r.Body.Close()
-		w.WriteHeader(http.StatusBadRequest)
+		http.Error(w, "erro ao ler requisição", http.StatusBadRequest)
 		return
 	}
-
 	_ = r.Body.Close()
 
-	msg.RetryCount = 0
-	msg.RequestedAt = time.Now().UTC()
-
-	if err := h.publisher.Publish(msg); err != nil {
+	if err := h.publisher.Publish(raw); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		paymentMsgPool.Put(msg)
 		return
 	}
 
 	w.WriteHeader(http.StatusAccepted)
-	paymentMsgPool.Put(msg)
 }

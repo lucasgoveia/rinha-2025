@@ -87,7 +87,7 @@ func setupDbPool(appConfig *config.AppConfig) *pgxpool.Pool {
 }
 
 func setupLogger() *slog.Logger {
-	logLevel := slog.LevelInfo
+	logLevel := slog.LevelWarn
 
 	handler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: logLevel,

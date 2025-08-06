@@ -2,10 +2,7 @@
 
 import (
 	"bufio"
-	"github.com/bytedance/sonic"
-	"io"
 	"net"
-	"rinha/internal/payments"
 	"sync"
 	"time"
 )
@@ -41,7 +38,7 @@ var bwPool = sync.Pool{
 	New: func() any { return bufio.NewWriterSize(nil, 512) },
 }
 
-func (p *Publisher) Publish(msg *payments.PaymentMessage) error {
+func (p *Publisher) Publish(msg []byte) error {
 	conn, err := p.acquire()
 	if err != nil {
 		return err
@@ -50,16 +47,21 @@ func (p *Publisher) Publish(msg *payments.PaymentMessage) error {
 	bw := bwPool.Get().(*bufio.Writer)
 	bw.Reset(conn)
 
-	err = writeJSON(bw, msg)
-	if err != nil {
-		bwPool.Put(bw)
-		_ = conn.Close()
-		p.replace()
+	if _, err = bw.Write(msg); err == nil {
+		err = bw.WriteByte('\n')
+	}
+	if err == nil {
+		err = bw.Flush()
 	}
 
-	_ = bw.Flush()
-
 	bwPool.Put(bw)
+
+	if err != nil {
+		// problema na conexão; fecha-a e substitui
+		_ = conn.Close()
+		p.replace()
+		return err
+	}
 
 	p.release(conn)
 	return nil
@@ -88,8 +90,4 @@ func (p *Publisher) replace() {
 		return
 	}
 	p.release(c)
-}
-
-func writeJSON(w io.Writer, msg *payments.PaymentMessage) error {
-	return sonic.ConfigFastest.NewEncoder(w).Encode(msg)
 }
