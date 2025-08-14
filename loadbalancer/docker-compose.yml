@@ -1,7 +1,7 @@
 ﻿version: '3.8'
 
 services:
-  pingora-loadbalancer:
+  hyper-loadbalancer:
     build:
       context: .
       dockerfile: Dockerfile
