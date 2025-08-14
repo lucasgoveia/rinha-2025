@@ -1,34 +1,21 @@
-﻿x-service-templates:
-  server: &server
+﻿x-default-user: &default-user "1000:1000"
+x-build-args: &build-args
+  APP_UID: "1000"
+  APP_GID: "1000"
+x-service-templates:
+  gateway: &gateway
     build:
-      context: .
+      context: ./gateway
       dockerfile: Dockerfile
+      args: *build-args
+    user: *default-user
     restart: always
     depends_on:
       - postgres
+      - worker
     networks:
       - backend
       - payment-processor
-    deploy:
-      resources:
-        limits:
-          cpus: '0.55'
-          memory: '60M'
-
-services:
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "9999:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-    depends_on:
-      - server1
-      - server2
-    networks:
-      - backend
-      - payment-processor
-    restart: always
     ulimits:
       nofile:
         soft: 16384
@@ -36,35 +23,96 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.25'
-          memory: '80M'
+          cpus: '0.3'
+          memory: '30M'
+    volumes:
+      - pg_socket:/var/run/postgresql
+      - tmp_sockets:/tmp
 
-  server1:
-    <<: *server
-    container_name: server1
-    hostname: server1
+services:
+  loadbalancer:
+#    build:
+#      context: ./loadbalancer
+#      dockerfile: Dockerfile
+#      args: *build-args
+#    image: nginx:alpine
+    image: haproxy:alpine
+#    user: *default-user
+    ports:
+      - "9999:9999"
+    depends_on:
+      - gateway1
+      - gateway2
+    networks:
+      - backend
+    restart: always
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    deploy:
+      resources:
+        limits:
+          cpus: '0.35'
+          memory: '50M'
+    volumes:
+      - tmp_sockets:/tmp
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     environment:
-      - SERVER_HOST=0.0.0.0
-      - SERVER_PORT=7118
-      - POSTGRES_URL=postgres://postgres:password@postgres:5432/rinha2025?pool_max_conns=10&pool_min_conns=2&pool_max_conn_idle_time=30s&pool_max_conn_lifetime=5m&pool_health_check_period=30s
-      - SERVICE_DEFAULT_URL=http://payment-processor-default:8080/payments
-      - SERVICE_FALLBACK_URL=http://payment-processor-fallback:8080/payments
-      - SERVICE_DEFAULT_HEALTH_URL=http://nginx:9000/default/payments/service-health
-      - SERVICE_FALLBACK_HEALTH_URL=http://nginx:9000/fallback/payments/service-health
+      - BACKENDS=/tmp/gateway1.sock,/tmp/gateway2.sock
 
 
-  server2:
-    <<: *server
-    container_name: server2
-    hostname: server2
+  gateway1:
+    <<: *gateway
+    container_name: gateway1
+    hostname: gateway1
     environment:
-      - SERVER_HOST=0.0.0.0
-      - SERVER_PORT=7118
-      - POSTGRES_URL=postgres://postgres:password@postgres:5432/rinha2025?pool_max_conns=10&pool_min_conns=2&pool_max_conn_idle_time=30s&pool_max_conn_lifetime=5m&pool_health_check_period=30s
-      - SERVICE_DEFAULT_URL=http://payment-processor-default:8080/payments
-      - SERVICE_FALLBACK_URL=http://payment-processor-fallback:8080/payments
-      - SERVICE_DEFAULT_HEALTH_URL=http://nginx:9000/default/payments/service-health
-      - SERVICE_FALLBACK_HEALTH_URL=http://nginx:9000/fallback/payments/service-health
+      - GATEWAY_LISTEN_SOCKET=/tmp/gateway1.sock
+      - POSTGRES_URL=postgres://postgres:password@/rinha2025?host=/var/run/postgresql
+      - GATEWAY_PUBLISH_SOCKET=/tmp/payments-stream.sock
+
+  gateway2:
+    <<: *gateway
+    container_name: gateway2
+    hostname: gateway2
+    environment:
+      - GATEWAY_LISTEN_SOCKET=/tmp/gateway2.sock
+      - POSTGRES_URL=postgres://postgres:password@/rinha2025?host=/var/run/postgresql
+      - GATEWAY_PUBLISH_SOCKET=/tmp/payments-stream.sock
+
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+      args: *build-args
+    user: *default-user
+    restart: always
+    depends_on:
+      - postgres
+    networks:
+      - backend
+      - payment-processor
+    ulimits:
+      nofile:
+        soft: 16384
+        hard: 16384
+    deploy:
+      resources:
+        limits:
+          cpus: '0.4'
+          memory: '60M'
+    volumes:
+      - pg_socket:/var/run/postgresql
+      - tmp_sockets:/tmp
+    container_name: worker
+    hostname: worker
+    environment:
+      - LISTEN_PATH=/tmp/payments-stream.sock
+      - NUM_WORKERS=64
+      - POSTGRES_URL=postgres://postgres:password@/rinha2025?host=/var/run/postgresql
+      - DEFAULT_PROCESSOR_URL=http://payment-processor-default:8080
+      - FALLBACK_PROCESSOR_URL=http://payment-processor-fallback:8080
 
   postgres:
     image: postgres:17-alpine
@@ -75,6 +123,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - pg_socket:/var/run/postgresql
     networks:
       - backend
     restart: always
@@ -86,6 +135,23 @@ services:
 
 volumes:
   postgres_data:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: uid=70,gid=70
+  pg_socket:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: uid=1000,gid=1000
+  tmp_sockets:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: uid=1000,gid=1000
 
 networks:
   backend:

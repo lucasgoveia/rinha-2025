@@ -1,0 +1,24 @@
+[package]
+name = "loadbalancer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hyper = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full", "net"] }
+http-body-util = "0.1"
+hyper-util = { version = "0.1", features = ["full"] }
+hyperlocal = "0.9.1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-C", "target-cpu=native"]
+
